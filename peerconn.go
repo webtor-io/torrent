@@ -803,6 +803,9 @@ func (c *PeerConn) peerRequestDataReadFailed(err error, r Request) {
 	}
 	c.logger.Levelf(logLevel, "error reading chunk for peer Request %v: %v", r, err)
 	if c.t.closed.IsSet() {
+		// The torrent has been dropped. Clean up the request so the deferred
+		// assertion in servePeerRequest does not panic.
+		c.deletePeerRequest(r)
 		return
 	}
 	i := pieceIndex(r.Index)
