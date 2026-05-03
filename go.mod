@@ -163,4 +163,4 @@ retract (
 	[v1.29.0, v1.53.2]
 )
 
-replace github.com/anacrolix/utp => github.com/webtor-io/utp v0.2.1-0.20260503115429-fdf5a98449a0
+replace github.com/anacrolix/utp => github.com/webtor-io/utp v0.2.1-0.20260503123918-24e7018d4f71
