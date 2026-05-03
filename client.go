@@ -386,7 +386,17 @@ func NewClient(cfg *ClientConfig) (cl *Client, err error) {
 		// Synchronous close so Client.Close() actually waits for the underlying
 		// UDP fd to be released; otherwise utp.Socket.ReadFrom and dht.Server.serve
 		// goroutines stay blocked on a "live" socket and leak past Close().
-		cl.onClose = append(cl.onClose, func() { s.Close() })
+		// Prefer ForceClose (utp fork) which destroys the socket immediately
+		// instead of waiting for active conns to drain via lazyDestroy — peer
+		// conns are dropped asynchronously by torrent teardown and would
+		// otherwise keep the socket alive.
+		cl.onClose = append(cl.onClose, func() {
+			if fc, ok := s.(interface{ ForceClose() error }); ok {
+				fc.ForceClose()
+			} else {
+				s.Close()
+			}
+		})
 		if peerNetworkEnabled(parseNetworkString(s.Addr().Network()), cl.config) {
 			if cl.config.DialForPeerConns {
 				cl.dialers = append(cl.dialers, s)

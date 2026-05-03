@@ -223,3 +223,15 @@ func (me utpSocketSocket) DialerNetwork() string {
 func (me utpSocketSocket) Dial(ctx context.Context, addr string) (conn net.Conn, err error) {
 	return me.utpSocket.DialContext(ctx, me.network, addr)
 }
+
+// ForceClose tears down the socket without waiting for active connections to
+// drain (utp's Close uses lazyDestroy which is no-op while s.conns is non-empty,
+// stranding the reader() goroutine on a "live" PacketConn). Forwards to the
+// underlying utp.Socket.ForceClose when available; otherwise falls back to
+// Close so the build still works against an unforked utp.
+func (me utpSocketSocket) ForceClose() error {
+	if fc, ok := me.utpSocket.(interface{ ForceClose() error }); ok {
+		return fc.ForceClose()
+	}
+	return me.Close()
+}
