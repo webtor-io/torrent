@@ -383,7 +383,10 @@ func NewClient(cfg *ClientConfig) (cl *Client, err error) {
 	cl.LocalPort()
 
 	for _, s := range sockets {
-		cl.onClose = append(cl.onClose, func() { go s.Close() })
+		// Synchronous close so Client.Close() actually waits for the underlying
+		// UDP fd to be released; otherwise utp.Socket.ReadFrom and dht.Server.serve
+		// goroutines stay blocked on a "live" socket and leak past Close().
+		cl.onClose = append(cl.onClose, func() { s.Close() })
 		if peerNetworkEnabled(parseNetworkString(s.Addr().Network()), cl.config) {
 			if cl.config.DialForPeerConns {
 				cl.dialers = append(cl.dialers, s)
