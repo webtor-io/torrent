@@ -1451,6 +1451,9 @@ file:
 
 func (pc *PeerConn) onReadHashes(msg *pp.Message) (err error) {
 	file := pc.t.getFileByPiecesRoot(msg.PiecesRoot)
+	if file == nil {
+		return fmt.Errorf("no file for pieces root %x", msg.PiecesRoot)
+	}
 	filePieceHashes := pc.receivedHashPieces[msg.PiecesRoot]
 	if filePieceHashes == nil {
 		filePieceHashes = make([][32]byte, file.numPieces())

@@ -3509,7 +3509,10 @@ func (t *Torrent) eachShortInfohash(each func(short [20]byte)) {
 
 func (t *Torrent) getFileByPiecesRoot(hash [32]byte) *File {
 	for _, f := range *t.files {
-		if f.piecesRoot.Unwrap() == hash {
+		if !f.piecesRoot.Ok {
+			continue
+		}
+		if f.piecesRoot.Value == hash {
 			return f
 		}
 	}
