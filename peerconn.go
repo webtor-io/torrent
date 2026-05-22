@@ -1423,9 +1423,12 @@ file:
 			// Minimizing to the number of pieces in a file conflicts with the BEP.
 			length := merkle.RoundUpToPowerOfTwo(uint(min(512, fileNumPieces-index)))
 			if length < 2 {
-				// This should have been filtered out by baseLayer and pieces root as piece hash
-				// checks.
-				panic(length)
+				// Tail batch with a single piece: the BEP hash-request length must be a
+				// power of two >= 2, so we cannot request this remainder from this peer.
+				// The piece hash is still reachable via the pieces-root chain or via a
+				// later request batched together with siblings. Skip instead of panicking.
+				pc.protocolLogger.Levelf(log.Warning, "skipping tail hash batch of length %d at index %d (fileNumPieces=%d)", length, index, fileNumPieces)
+				continue
 			}
 			if length%2 != 0 {
 				pc.protocolLogger.Levelf(log.Warning, "requesting odd hashes length %d", length)
