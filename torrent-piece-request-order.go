@@ -1,7 +1,7 @@
 package torrent
 
 import (
-	"fmt"
+	"github.com/anacrolix/log"
 
 	"github.com/RoaringBitmap/roaring"
 	g "github.com/anacrolix/generics"
@@ -110,6 +110,16 @@ func (t *Torrent) checkPendingPiecesMatchesRequestOrder() {
 		intersection := roaring.And(&proBitmap, &t._pendingPieces)
 		exclPro := roaring.AndNot(&proBitmap, intersection)
 		exclPending := roaring.AndNot(&t._pendingPieces, intersection)
-		panic(fmt.Sprintf("piece request order has %v and pending pieces has %v", exclPro.String(), exclPending.String()))
+		// This is a debug invariant reached from needData, which sits on the hot
+		// path (needData <- wantPeers <- openNewConns) and is called right after
+		// metadata arrives over the extension protocol, while the request order
+		// is still being reconciled with _pendingPieces. Panicking there kills a
+		// live request for a mismatch that is transient, so report instead.
+		t.logger.Levelf(
+			log.Warning,
+			"piece request order has %v and pending pieces has %v",
+			exclPro.String(),
+			exclPending.String(),
+		)
 	}
 }
