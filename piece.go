@@ -218,6 +218,36 @@ func (p *Piece) VerifyData() error {
 	return p.VerifyDataContext(context.Background())
 }
 
+// RefreshCompletionFromStorage re-reads this piece's completion state from the
+// storage backend and updates the client's cached view, WITHOUT re-hashing the
+// data. It reports whether the cached value changed.
+//
+// This exists for storage backends that discard piece data on their own
+// initiative — a cache with an eviction policy, say. Such a backend can mark
+// the piece incomplete in its completion store, but that store is not what
+// reads consult: Torrent.pieceComplete answers from the in-memory
+// _completedPieces bitmap, which only anacrolix itself ever writes. Until the
+// bitmap is updated the client still believes the piece is present and will
+// serve whatever the backend now returns for that range — for a hole-punched
+// file, zeroes, with no error, because reading a hole succeeds.
+//
+// VerifyData is the existing way to correct the bitmap, but it forces a full
+// re-hash to discover what the backend already knows, and it blocks until the
+// hash completes — which deadlocks if called from inside the hashing callback,
+// i.e. from Storage.MarkComplete. This is the cheap, non-blocking alternative:
+// no I/O beyond the completion lookup, safe to call from MarkComplete (where
+// pieceHashed has released the client lock around the storage call).
+//
+// The caller must NOT hold the client lock.
+func (p *Piece) RefreshCompletionFromStorage() bool {
+	p.t.cl.lock()
+	defer p.t.cl.unlock()
+	if p.t.closed.IsSet() {
+		return false
+	}
+	return p.t.updatePieceCompletion(p.index)
+}
+
 // Forces the piece data to be rehashed. This might be a temporary method until
 // an event-based one is created. Possibly this blocking style is more suited to
 // external control of hashing concurrency.
