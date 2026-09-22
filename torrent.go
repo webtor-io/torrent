@@ -519,10 +519,20 @@ func pieceEndFileIndex(pieceEndOffset int64, files []*File) int {
 	return len(files)
 }
 
+// cacheLength stores the torrent's length in the torrent's own byte space:
+// the end of the last file. For v1 that is the sum of the file lengths. For
+// v2 and hybrid torrents it is not: every file starts on a piece boundary
+// (UpvertedFiles reports the aligned TorrentOffset and omits the pad files),
+// so the sum falls short of where the data ends by the padding. With the sum,
+// offsets past it were "outside the torrent": byteRegionPieces returned an
+// empty range and offsetRequest failed, so a reader at the tail of such a
+// torrent never saw data available, blocked until its context ended, and then
+// panicked in updatePieceCompletion ("0 <piece>") — seen on hybrid torrents
+// with 16 MiB pieces in production, 2026-09-22.
 func (t *Torrent) cacheLength() {
 	var l int64
 	for _, f := range t.info.UpvertedFiles() {
-		l += f.Length
+		l = max(l, f.TorrentOffset+f.Length)
 	}
 	t._length = Some(l)
 }

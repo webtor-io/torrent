@@ -315,6 +315,14 @@ func (r *reader) readAt(ctx context.Context, b []byte, pos int64) (n int, err er
 	if err == nil {
 		return
 	}
+	// The caller gave up (client gone, deadline): that is not a storage
+	// failure, and the recovery below — reader reset, completion resync,
+	// retry — is for storage failures. Running it on a cancelled context
+	// logged three errors per abandoned read and walked into the piece-window
+	// invariant in updatePieceCompletion.
+	if ctx.Err() != nil {
+		return
+	}
 	r.slogger().Error("initial read failed", "err", err)
 
 	err = r.clearStorageReader()
