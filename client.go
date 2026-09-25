@@ -1737,6 +1737,8 @@ func (cl *Client) newConnection(nc net.Conn, opts newConnectionOpts) (c *PeerCon
 			outgoing:    opts.outgoing,
 			choking:     true,
 			peerChoking: true,
+			// A connection starts choked.
+			peerChokingSince: time.Now(),
 
 			RemoteAddr:      opts.remoteAddr,
 			localPublicAddr: opts.localPublicAddr,

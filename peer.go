@@ -80,8 +80,10 @@ type (
 		choking bool
 
 		// Stuff controlled by the remote peer.
-		peerInterested        bool
-		peerChoking           bool
+		peerInterested bool
+		peerChoking    bool
+		// When the peer last started choking us; zero while it is not.
+		peerChokingSince      time.Time
 		PeerPrefersEncryption bool // as indicated by 'e' field in extension handshake
 		// The highest possible number of pieces the torrent could have based on
 		// communication with the peer. Generally only useful until we have the
@@ -136,6 +138,8 @@ func (p *Peer) Stats() (ret PeerStats) {
 	ret.DownloadRate = p.downloadRate()
 	ret.LastWriteUploadRate = p.peerImpl.lastWriteUploadRate()
 	ret.RemotePieceCount = p.remotePieceCount()
+	ret.PeerChoking = p.peerChoking
+	ret.PeerChokingSince = p.peerChokingSince
 	return
 }
 

@@ -927,6 +927,7 @@ func (c *PeerConn) mainReadLoop() (err error) {
 				// only a single peer, our chunk balancing should smooth over this abuse.
 			}
 			c.peerChoking = true
+			c.peerChokingSince = time.Now()
 			c.updateExpectingChunks()
 		case pp.Unchoke:
 			if !c.peerChoking {
@@ -936,6 +937,7 @@ func (c *PeerConn) mainReadLoop() (err error) {
 				break
 			}
 			c.peerChoking = false
+			c.peerChokingSince = time.Time{}
 			preservedCount := 0
 			c.requestState.Requests.Iterate(func(x RequestIndex) bool {
 				if !c.peerAllowedFast.Contains(c.t.pieceIndexOfRequestIndex(x)) {
@@ -1263,6 +1265,29 @@ func (c *PeerConn) pexPeerFlags() pp.PexPeerFlags {
 		f |= pp.PexSupportsUtp
 	}
 	return f
+}
+
+// Redial drops the connection and puts the peer's dial address back in the
+// torrent's peer pool, so the client connects to it afresh. Some peers choke a
+// connection that never uploads to them for as long as it lives, yet unchoke a
+// new one at once; a client that does not upload gets data from such a peer
+// only by reconnecting.
+func (c *PeerConn) Redial() {
+	c.locker().Lock()
+	defer c.locker().Unlock()
+	t := c.t
+	if t == nil || c.closed.IsSet() {
+		return
+	}
+	info := PeerInfo{
+		Id:                 c.PeerID,
+		Addr:               c.dialAddr(),
+		Source:             c.Discovery,
+		SupportsEncryption: c.headerEncrypted,
+		Trusted:            c.trusted,
+	}
+	t.dropConnection(c)
+	t.addPeer(info)
 }
 
 // This returns the address to use if we want to dial the peer again. It incorporates the peer's
