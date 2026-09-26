@@ -1,6 +1,6 @@
 module github.com/anacrolix/torrent
 
-go 1.18
+go 1.25.0
 
 require (
 	crawshaw.io/sqlite v0.3.3-0.20220618202545-d1964889ea3c
@@ -96,12 +96,12 @@ require (
 	go.opentelemetry.io/otel/exporters/otlp/internal/retry v1.8.0 // indirect
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.8.0 // indirect
 	go.opentelemetry.io/proto/otlp v0.18.0 // indirect
-	golang.org/x/crypto v0.0.0-20220622213112-05595931fe9d // indirect
+	golang.org/x/crypto v0.52.0 // indirect
 	golang.org/x/exp v0.0.0-20220613132600-b0d781184e0d // indirect
-	golang.org/x/net v0.0.0-20220630215102-69896b714898 // indirect
-	golang.org/x/sync v0.0.0-20220601150217-0de741cfad7f // indirect
-	golang.org/x/sys v0.0.0-20220702020025-31831981b65f // indirect
-	golang.org/x/text v0.3.7 // indirect
+	golang.org/x/net v0.54.0 // indirect
+	golang.org/x/sync v0.20.0 // indirect
+	golang.org/x/sys v0.45.0 // indirect
+	golang.org/x/text v0.37.0 // indirect
 	golang.org/x/xerrors v0.0.0-20220609144429-65e65417b02f // indirect
 	google.golang.org/genproto v0.0.0-20211118181313-81c1377c94b1 // indirect
 	google.golang.org/grpc v1.46.2 // indirect
