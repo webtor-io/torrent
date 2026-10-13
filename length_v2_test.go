@@ -23,6 +23,7 @@ func v2Info() *metainfo.Info {
 func TestCacheLength_V2EndsAtLastFile(t *testing.T) {
 	tor := &Torrent{info: v2Info(), chunkSize: 4}
 	tor.cacheLength()
+	tor.pieces = make([]Piece, tor.info.NumPieces()) // the piece count comes from the pieces, as after setInfo
 	if got := tor.length(); got != 36 {
 		t.Fatalf("length = %d, want 36 (end of the last piece-aligned file)", got)
 	}
