@@ -1079,8 +1079,10 @@ func (t *Torrent) usualPieceSize() int {
 	return int(t.info.PieceLength)
 }
 
+// The piece count is asked for once per piece per peer in onSetInfo and on every read, and
+// Info.NumPieces walks the whole file tree of a v2 torrent. makePieces counted once.
 func (t *Torrent) numPieces() pieceIndex {
-	return t.info.NumPieces()
+	return len(t.pieces)
 }
 
 func (t *Torrent) numPiecesCompleted() (num pieceIndex) {
@@ -1638,8 +1640,8 @@ func (t *Torrent) byteRegionPieces(off, size int64) (begin, end pieceIndex) {
 	}
 	begin = pieceIndex(off / t.info.PieceLength)
 	end = pieceIndex((off + size + t.info.PieceLength - 1) / t.info.PieceLength)
-	if end > t.info.NumPieces() {
-		end = t.info.NumPieces()
+	if end > t.numPieces() {
+		end = t.numPieces()
 	}
 	return
 }
