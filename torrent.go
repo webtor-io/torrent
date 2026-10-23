@@ -3104,6 +3104,13 @@ func (t *Torrent) addWebSeed(url string, opts ...AddWebSeedsOpt) bool {
 	if t.cl.config.DisableWebseeds {
 		return false
 	}
+	// A URL that does not parse cannot serve anything, and its peer would carry a nil
+	// RemoteAddr that panics in remoteIp, which banPeerIP calls for every peer.
+	remoteAddr := remoteAddrFromUrl(url)
+	if remoteAddr == nil {
+		t.slogger().Warn("ignoring webseed with unparsable URL", "url", url)
+		return false
+	}
 	urlKey := webseedUrlKey(unique.Make(url))
 	if _, ok := t.webSeeds[urlKey]; ok {
 		return false
@@ -3123,7 +3130,7 @@ func (t *Torrent) addWebSeed(url string, opts ...AddWebSeedsOpt) bool {
 			outgoing: true,
 			Network:  "http",
 			// TODO: Set ban prefix?
-			RemoteAddr: remoteAddrFromUrl(url),
+			RemoteAddr: remoteAddr,
 			callbacks:  t.callbacks(),
 		},
 		client: webseed.Client{
