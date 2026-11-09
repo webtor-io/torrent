@@ -75,6 +75,25 @@ type trackerAnnounceResult struct {
 	Completed time.Time
 }
 
+// AllAnnouncesFailing reports whether the torrent has trackers and the latest
+// announce to every one of them ended in an error: a refusal, an HTTP error, a
+// timeout. False while any tracker has not finished an announce yet (its Err is
+// nil), and when any is a websocket tracker, whose outcome is not recorded here.
+func (t *Torrent) AllAnnouncesFailing() bool {
+	t.cl.rLock()
+	defer t.cl.rUnlock()
+	if len(t.trackerAnnouncers) == 0 {
+		return false
+	}
+	for _, a := range t.trackerAnnouncers {
+		ts, ok := a.(*trackerScraper)
+		if !ok || ts.lastAnnounce.Err == nil {
+			return false
+		}
+	}
+	return true
+}
+
 func (me *trackerScraper) getIp() (ip net.IP, err error) {
 	var ips []net.IP
 	if me.lookupTrackerIp != nil {
