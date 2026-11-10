@@ -12,6 +12,7 @@ import (
 
 	"github.com/anacrolix/torrent/bencode"
 	"github.com/anacrolix/torrent/metainfo"
+	"github.com/anacrolix/torrent/tracker/shared"
 )
 
 // Add HTTP endpoints that serve the metainfo. They will be used if the torrent info isn't obtained
@@ -39,7 +40,8 @@ func (t *Torrent) sourcer(source string) {
 		if err == nil || ctx.Err() != nil {
 			return
 		}
-		t.slogger().Warn("error using torrent source", "source", source, "err", err)
+		// A private tracker's .torrent download link carries the account's key.
+		t.slogger().Warn("error using torrent source", "source", shared.RedactUrl(source), "err", err)
 		if !retry.Ok {
 			return
 		}
@@ -72,12 +74,15 @@ func (t *Torrent) trySource(source string) (retry g.Option[time.Duration], err e
 }
 
 func getTorrentSource(ctx context.Context, source string, hc *http.Client) (mi metainfo.MetaInfo, err error) {
+	// Both errors quote the source URL, and with it a private tracker's key.
 	var req *http.Request
 	if req, err = http.NewRequestWithContext(ctx, http.MethodGet, source, nil); err != nil {
+		err = shared.RedactUrlError(err)
 		return
 	}
 	var resp *http.Response
 	if resp, err = hc.Do(req); err != nil {
+		err = shared.RedactUrlError(err)
 		return
 	}
 	defer resp.Body.Close()

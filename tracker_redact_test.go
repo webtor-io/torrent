@@ -1,10 +1,12 @@
 package torrent
 
 import (
+	"context"
 	"log/slog"
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -138,4 +140,30 @@ func TestWebsocketTrackerLogsOmitTrackerKey(t *testing.T) {
 	assert.Contains(t, out, `error doing initial announce to "`+wsUrl+`"`)
 	assert.NotContains(t, out, testTrackerKey)
 	assert.NotContains(t, out, "/announce")
+}
+
+func TestMetainfoSourceLogsOmitTrackerKey(t *testing.T) {
+	srv := hangUpTracker(t)
+	var logs logCapture
+	cl := newLoggedTrackerClient(t, &logs)
+	// A private tracker's .torrent download link carries the account's key.
+	source := srv.URL + "/download.php?id=1&passkey=" + testTrackerKey
+	_, err := cl.AddMagnet("magnet:?xt=urn:btih:" + testutil.GreetingMetaInfo().HashInfoBytes().HexString() +
+		"&xs=" + url.QueryEscape(source))
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		return strings.Contains(logs.String(), "error using torrent source")
+	}, 10*time.Second, 10*time.Millisecond)
+	_, err = getTorrentSource(context.Background(), source, http.DefaultClient)
+	require.Error(t, err)
+	// url.Parse refuses this one, and its error quotes the whole string.
+	_, parseErr := getTorrentSource(context.Background(), source+"\x7f", http.DefaultClient)
+	require.Error(t, parseErr)
+	out := logs.String()
+	// The source is still named, by scheme and host.
+	assert.Contains(t, out, "source="+srv.URL+" ")
+	for _, s := range []string{out, err.Error(), parseErr.Error()} {
+		assert.NotContains(t, s, testTrackerKey)
+		assert.NotContains(t, s, "download.php")
+	}
 }
