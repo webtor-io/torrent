@@ -1,7 +1,6 @@
 package httpTracker
 
 import (
-	"bytes"
 	"context"
 	"expvar"
 	"fmt"
@@ -22,6 +21,24 @@ import (
 )
 
 var vars = expvar.NewMap("tracker/http")
+
+const (
+	// We send no numwant, so a tracker returns its default number of peers, commonly 50. A compact
+	// reply spends 6 bytes on an IPv4 peer and 18 on an IPv6 one, a dictionary reply about 70, so
+	// even thousands of peers fit far below this. It bounds what a tracker can make us buffer.
+	maxResponseBodyLen = 1 << 20
+	// Bounds the tracker's own text that goes into an error and from there into logs. Refusals
+	// ("unregistered torrent") are a few dozen bytes, and operators classify them by that text, so
+	// this keeps them whole.
+	maxTrackerTextLen = 256
+)
+
+func truncateTrackerText(s string) string {
+	if len(s) <= maxTrackerTextLen {
+		return s
+	}
+	return s[:maxTrackerTextLen] + "..."
+}
 
 func setAnnounceParams(_url *url.URL, ar *AnnounceRequest, opts AnnounceOpt) {
 	q := url.Values{}
@@ -113,22 +130,30 @@ func (cl Client) Announce(ctx context.Context, ar AnnounceRequest, opt AnnounceO
 		return
 	}
 	defer resp.Body.Close()
-	var buf bytes.Buffer
-	io.Copy(&buf, resp.Body)
+	// As before, a read error is not checked: a cut body fails to decode below.
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodyLen+1))
+	// Neither the body nor the tracker's reason phrase goes into errors: either can echo the
+	// request URL, and both are as long as the tracker likes.
+	status := fmt.Sprintf("%d %s", resp.StatusCode, http.StatusText(resp.StatusCode))
+	if len(body) > maxResponseBodyLen {
+		err = fmt.Errorf("response from tracker: %s: body exceeds %d bytes", status, maxResponseBodyLen)
+		return
+	}
 	if resp.StatusCode != 200 {
-		err = fmt.Errorf("response from tracker: %s: %q", resp.Status, buf.Bytes())
+		err = fmt.Errorf("response from tracker: %s: %d bytes", status, len(body))
 		return
 	}
 	var trackerResponse HttpResponse
-	err = bencode.Unmarshal(buf.Bytes(), &trackerResponse)
+	err = bencode.Unmarshal(body, &trackerResponse)
 	if _, ok := err.(bencode.ErrUnusedTrailingBytes); ok {
 		err = nil
 	} else if err != nil {
-		err = fmt.Errorf("error decoding %q: %s", buf.Bytes(), err)
+		// The decoder quotes dict keys, which are the tracker's.
+		err = fmt.Errorf("error decoding response from tracker (%d bytes): %s", len(body), truncateTrackerText(err.Error()))
 		return
 	}
 	if trackerResponse.FailureReason != "" {
-		err = fmt.Errorf("tracker gave failure reason: %q", trackerResponse.FailureReason)
+		err = fmt.Errorf("tracker gave failure reason: %q", truncateTrackerText(trackerResponse.FailureReason))
 		return
 	}
 	vars.Add("successful http announces", 1)
