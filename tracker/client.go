@@ -8,6 +8,7 @@ import (
 	"github.com/anacrolix/log"
 
 	trHttp "github.com/anacrolix/torrent/tracker/http"
+	"github.com/anacrolix/torrent/tracker/shared"
 	"github.com/anacrolix/torrent/tracker/udp"
 	"github.com/anacrolix/torrent/types/infohash"
 )
@@ -31,7 +32,7 @@ type NewClientOpts struct {
 func NewClient(urlStr string, opts NewClientOpts) (Client, error) {
 	_url, err := url.Parse(urlStr)
 	if err != nil {
-		return nil, err
+		return nil, shared.RedactUrlError(err)
 	}
 	switch _url.Scheme {
 	case "http", "https":

@@ -7,6 +7,7 @@ import (
 	"net/url"
 
 	"github.com/anacrolix/torrent/bencode"
+	"github.com/anacrolix/torrent/tracker/shared"
 	"github.com/anacrolix/torrent/tracker/udp"
 	"github.com/anacrolix/torrent/types/infohash"
 )
@@ -28,13 +29,15 @@ func (cl Client) Scrape(ctx context.Context, ihs []infohash.T) (out udp.ScrapeRe
 		query.Add("info_hash", ih.AsString())
 	}
 	_url.RawQuery = query.Encode()
-	log.Printf("%q", _url.String())
+	// The scrape URL keeps the announce URL's path and query, so a private tracker's key.
+	log.Printf("%q", shared.RedactUrl(_url.String()))
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, _url.String(), nil)
 	if err != nil {
 		return
 	}
 	resp, err := cl.hc.Do(req)
 	if err != nil {
+		err = shared.RedactUrlError(err)
 		return
 	}
 	defer resp.Body.Close()

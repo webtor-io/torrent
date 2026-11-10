@@ -53,6 +53,7 @@ import (
 
 	"github.com/anacrolix/torrent/storage"
 	"github.com/anacrolix/torrent/tracker"
+	"github.com/anacrolix/torrent/tracker/shared"
 	typedRoaring "github.com/anacrolix/torrent/typed-roaring"
 	"github.com/anacrolix/torrent/types/infohash"
 	infohash_v2 "github.com/anacrolix/torrent/types/infohash-v2"
@@ -2111,7 +2112,7 @@ func (t *Torrent) startWebsocketAnnouncer(u url.URL, shortInfohash [20]byte) tor
 			if t.closed.IsSet() {
 				level = log.Debug
 			}
-			t.logger.Levelf(level, "error doing initial announce to %q: %v", u.String(), err)
+			t.logger.Levelf(level, "error doing initial announce to %q: %v", shared.RedactUrl(u.String()), err)
 		}
 	}()
 	return wst
@@ -2125,7 +2126,8 @@ func (t *Torrent) startScrapingTracker(_url string) {
 	if err != nil {
 		// URLs with a leading '*' appear to be a uTorrent convention to disable trackers.
 		if _url[0] != '*' {
-			t.logger.Levelf(log.Warning, "error parsing tracker url: %v", err)
+			// The error quotes the URL, and with it a private tracker's key.
+			t.logger.Levelf(log.Warning, "error parsing tracker url: %v", shared.RedactUrlError(err))
 		}
 		return
 	}
@@ -2174,7 +2176,8 @@ func (t *Torrent) startScrapingTrackerWithInfohash(u *url.URL, urlStr string, sh
 			t:               t,
 			lookupTrackerIp: t.cl.config.LookupTrackerIp,
 			stopCh:          make(chan struct{}),
-			logger:          t.slogger().With("name", "tracker", "urlKey", u.String()),
+			// Private trackers put the account's key in the URL's path or query.
+			logger: t.slogger().With("name", "tracker", "urlKey", shared.RedactUrl(u.String())),
 		}
 		go newAnnouncer.Run()
 		return newAnnouncer

@@ -108,6 +108,8 @@ func (cl Client) Announce(ctx context.Context, ar AnnounceRequest, opt AnnounceO
 	req.Host = opt.HostHeader
 	resp, err := cl.hc.Do(req)
 	if err != nil {
+		// The error quotes the request URL: a private tracker's key, and our announce parameters.
+		err = shared.RedactUrlError(err)
 		return
 	}
 	defer resp.Body.Close()
