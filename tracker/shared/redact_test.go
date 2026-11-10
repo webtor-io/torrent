@@ -97,6 +97,10 @@ func TestRedactEcho(t *testing.T) {
 		{"every occurrence", "http://tracker.invalid/a?pk=" + testKey, testKey + " " + testKey, "<redacted> <redacted>"},
 		// Short parts are ordinary words of the tracker's text as often as not.
 		{"short values", "http://tracker.invalid/t/a.php?id=1&uid=42", "id 1 for uid 42 at t/a.php unknown", "id 1 for uid 42 at t/a.php unknown"},
+		// Every tracker URL ends in one of these, and refusals name them.
+		{"announce kept", "http://tracker.invalid/" + testKey + "/announce", "announce refused: " + refusal, "announce refused: Invalid passkey (33 - <redacted>)"},
+		{"common segments in any case", "http://tracker.invalid/" + testKey + "/SCRAPE.php/Announce.PHP", "Announce.PHP, SCRAPE.php: " + testKey, "Announce.PHP, SCRAPE.php: <redacted>"},
+		{"key starting with announce", "http://tracker.invalid/announce0123/a", "bad announce0123", "bad <redacted>"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			u, err := url.Parse(c.url)

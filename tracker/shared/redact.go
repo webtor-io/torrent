@@ -43,6 +43,14 @@ const (
 	minEchoLen = 8
 )
 
+// Path segments of tracker URLs that are no one's secret. Refusals name them ("announce failed"),
+// and replacing them would only garble the tracker's text.
+var commonSegments = []string{"announce", "announce.php", "scrape", "scrape.php"}
+
+func isCommonSegment(s string) bool {
+	return slices.ContainsFunc(commonSegments, func(c string) bool { return strings.EqualFold(c, s) })
+}
+
 // TruncateTrackerText cuts s to MaxTrackerTextLen bytes, and marks the cut with "...".
 func TruncateTrackerText(s string) string {
 	if len(s) <= MaxTrackerTextLen {
@@ -53,9 +61,9 @@ func TruncateTrackerText(s string) string {
 
 // RedactEcho returns text a tracker sent with every echo of u replaced by "<redacted>": the whole
 // URL, its userinfo, and each userinfo, path or query part of at least minEchoLen bytes, as sent
-// or unescaped. Trackers quote a refused key back ("Invalid passkey (<key>)"), and only the client
-// knows which parts of its URL to look for. Call it before TruncateTrackerText: a cut through an
-// echo would leave a prefix that no longer matches.
+// or unescaped, but for commonSegments. Trackers quote a refused key back ("Invalid passkey
+// (<key>)"), and only the client knows which parts of its URL to look for. Call it before
+// TruncateTrackerText: a cut through an echo would leave a prefix that no longer matches.
 func RedactEcho(text string, u *url.URL) string {
 	parts := []string{u.String(), u.User.String()}
 	split := func(s, seps string, unescape func(string) (string, error)) {
@@ -73,7 +81,7 @@ func RedactEcho(text string, u *url.URL) string {
 	// Longest first, so a shorter part inside a longer echo can't leave pieces of it.
 	slices.SortFunc(parts, func(a, b string) int { return len(b) - len(a) })
 	for _, p := range parts {
-		if len(p) >= minEchoLen {
+		if len(p) >= minEchoLen && !isCommonSegment(p) {
 			text = strings.ReplaceAll(text, p, "<redacted>")
 		}
 	}
