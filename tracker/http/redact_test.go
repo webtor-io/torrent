@@ -271,3 +271,15 @@ func TestAnnounceDecodeErrorRedactsEchoedKey(t *testing.T) {
 	assert.NotContains(t, err.Error(), testKey)
 	assert.Contains(t, err.Error(), "passkey <redacted>")
 }
+
+func TestAnnounceDeclaredStringLongerThanReplyIsRefused(t *testing.T) {
+	// A string the reply declares at 100 MB would make the decoder allocate that much before it
+	// finds the reply ends there; no string can be longer than the reply that carries it.
+	body := "d8:intervali1800e5:peers100000000:"
+	srv := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(body))
+	})
+	_, err := privateTrackerClient(t, srv).Announce(context.Background(), AnnounceRequest{}, AnnounceOpt{})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), fmt.Sprintf("exceeds limit (%d)", len(body)))
+}

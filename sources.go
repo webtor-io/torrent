@@ -108,8 +108,11 @@ func getTorrentSource(ctx context.Context, source string, hc *http.Client) (mi m
 		err = fmt.Errorf("metainfo source response exceeds %d bytes", maxSourceBodyLen)
 		return
 	}
-	// As before, bytes after the metainfo are ignored.
-	if err = bencode.NewDecoder(bytes.NewReader(body)).Decode(&mi); err != nil {
+	// As before, bytes after the metainfo are ignored. No string is longer than the body, so a
+	// declared length past it is refused before the decoder allocates it (default bound: 128 MiB).
+	dec := bencode.NewDecoder(bytes.NewReader(body))
+	dec.MaxStrLen = int64(len(body))
+	if err = dec.Decode(&mi); err != nil {
 		// The decoder quotes dict keys, which are the source's: it can echo our key, at any length.
 		err = fmt.Errorf("error decoding metainfo source response (%d bytes): %s",
 			len(body), shared.TruncateTrackerText(shared.RedactEcho(err.Error(), req.URL)))

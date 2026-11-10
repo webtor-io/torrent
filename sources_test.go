@@ -84,3 +84,15 @@ func TestMetainfoSourceDecodeErrorRedactsEchoedKey(t *testing.T) {
 	assert.NotContains(t, err.Error(), testTrackerKey)
 	assert.LessOrEqual(t, len(err.Error()), len(prefix)+shared.MaxTrackerTextLen+len("..."))
 }
+
+func TestMetainfoSourceDeclaredStringLongerThanBodyIsRefused(t *testing.T) {
+	// See TestAnnounceDeclaredStringLongerThanReplyIsRefused: the declared length is bounded by the body.
+	body := "d4:infod6:pieces100000000:"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+	_, err := getTorrentSource(context.Background(), srv.URL+"/x.torrent", http.DefaultClient)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), fmt.Sprintf("exceeds limit (%d)", len(body)))
+}

@@ -1,6 +1,7 @@
 package httpTracker
 
 import (
+	"bytes"
 	"context"
 	"expvar"
 	"fmt"
@@ -137,10 +138,12 @@ func (cl Client) Announce(ctx context.Context, ar AnnounceRequest, opt AnnounceO
 		return
 	}
 	var trackerResponse HttpResponse
-	err = bencode.Unmarshal(body, &trackerResponse)
-	if _, ok := err.(bencode.ErrUnusedTrailingBytes); ok {
-		err = nil
-	} else if err != nil {
+	// Bytes after the reply are ignored, as they were. No string can be longer than the reply
+	// that carries it; without that bound the decoder allocates whatever length the reply
+	// declares (up to bencode's 128 MiB default) before it finds the reply ends there.
+	dec := bencode.NewDecoder(bytes.NewReader(body))
+	dec.MaxStrLen = int64(len(body))
+	if err = dec.Decode(&trackerResponse); err != nil {
 		// The decoder quotes dict keys, which are the tracker's.
 		err = fmt.Errorf("error decoding response from tracker (%d bytes): %s", len(body), cl.trackerText(err.Error()))
 		return
