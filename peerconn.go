@@ -212,6 +212,10 @@ func (cn *PeerConn) peerHasAllPieces() (all, known bool) {
 
 func (cn *PeerConn) onGotInfo(info *metainfo.Info) {
 	cn.setNumPieces(info.NumPieces())
+	// PEX may have been enabled before we knew the torrent was private (BEP 27).
+	if cn.t.isPrivate() && cn.pex.IsEnabled() {
+		cn.pex.disable()
+	}
 }
 
 // Correct the PeerPieces slice length. Return false if the existing slice is invalid, such as by
@@ -1098,7 +1102,10 @@ func (c *PeerConn) onReadExtendedMsg(id pp.ExtensionNumber, payload []byte) (err
 		}
 		c.requestPendingMetadata()
 		if !t.cl.config.DisablePEX {
-			t.pex.Add(c) // we learnt enough now
+			// BEP 27: a private torrent's peers are never shared, so they aren't listed.
+			if !t.isPrivate() {
+				t.pex.Add(c) // we learnt enough now
+			}
 			// This checks the extension is supported internally.
 			c.pex.Init(c)
 		}
@@ -1388,6 +1395,13 @@ func makeBuiltinLtepProtocols(pex bool) LocalLtepProtocolMap {
 }
 
 func (c *PeerConn) addBuiltinLtepProtocols(pex bool) {
+	if pex && c.t.isPrivate() {
+		// BEP 27: don't offer ut_pex for a private torrent. The client-wide map offers it, so
+		// the conn gets its own map without it.
+		m := makeBuiltinLtepProtocols(false)
+		c.LocalLtepProtocolMap = &m
+		return
+	}
 	c.LocalLtepProtocolMap = &c.t.cl.defaultLocalLtepProtocolMap
 }
 

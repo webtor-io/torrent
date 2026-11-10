@@ -1004,6 +1004,19 @@ func (t *Torrent) haveInfo() bool {
 	return t.info != nil
 }
 
+// isPrivate reports whether the torrent's metainfo carries BEP 27's
+// `private=1` flag. Private torrents must not be announced via DHT, must
+// not participate in PEX, and must not be discovered or announced via
+// Local Peer Discovery (BEP 14). Returns false when info has not yet been
+// loaded (e.g. magnet that hasn't fetched metadata yet) — callers that need
+// to be conservative should also check haveInfo().
+func (t *Torrent) isPrivate() bool {
+	if t.info == nil {
+		return false
+	}
+	return t.info.Private != nil && *t.info.Private
+}
+
 // Returns a run-time generated MetaInfo that includes the info bytes and
 // announce-list as currently known to the client.
 func (t *Torrent) newMetaInfo() metainfo.MetaInfo {
@@ -2325,12 +2338,27 @@ func (t *Torrent) timeboxedAnnounceToDht(s DhtServer) error {
 	if err != nil {
 		return err
 	}
-	select {
-	case <-t.closed.Done():
-	case <-time.After(5 * time.Minute):
+	defer stop()
+	timeout := time.After(5 * time.Minute)
+	gotInfo := t.gotMetainfoC
+	for {
+		select {
+		case <-t.closed.Done():
+			return nil
+		case <-timeout:
+			return nil
+		case <-gotInfo:
+			// A magnet's announce runs while the info is fetched. If the info says private
+			// (BEP 27), stop now rather than when the announce times out.
+			t.cl.rLock()
+			private := t.isPrivate()
+			t.cl.rUnlock()
+			if private {
+				return nil
+			}
+			gotInfo = nil
+		}
 	}
-	stop()
-	return nil
 }
 
 func (t *Torrent) dhtAnnouncer(s DhtServer) {
@@ -2340,6 +2368,13 @@ func (t *Torrent) dhtAnnouncer(s DhtServer) {
 	for {
 		for {
 			if t.closed.IsSet() {
+				return
+			}
+			// BEP 27: private torrents must not be announced via DHT. We re-check
+			// every loop because info may be loaded later (e.g. via magnet). Once
+			// it says private it can't change, so unlike upstream (which waits
+			// here) we end the announcer rather than wake it on every event.
+			if t.isPrivate() {
 				return
 			}
 			// We're also announcing ourselves as a listener, so we don't just want peer addresses.
@@ -2471,8 +2506,9 @@ func (t *Torrent) addPeerConn(c *PeerConn) (err error) {
 	}
 	t.conns[c] = struct{}{}
 	t.cl.event.Broadcast()
-	// We'll never receive the "p" extended handshake parameter.
-	if !t.cl.config.DisablePEX && !c.PeerExtensionBytes.SupportsExtended() {
+	// We'll never receive the "p" extended handshake parameter. A private torrent's peers are
+	// never shared (BEP 27).
+	if !t.cl.config.DisablePEX && !c.PeerExtensionBytes.SupportsExtended() && !t.isPrivate() {
 		t.pex.Add(c)
 	}
 	return nil
