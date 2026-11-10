@@ -14,6 +14,7 @@ import (
 	"github.com/anacrolix/dht/v2/krpc"
 
 	"github.com/anacrolix/torrent/tracker"
+	httpTracker "github.com/anacrolix/torrent/tracker/http"
 )
 
 // Announces a torrent to a tracker at regular intervals, when peers are
@@ -29,7 +30,23 @@ type trackerScraper struct {
 	// TODO: chansync
 	stopOnce sync.Once
 	stopCh   chan struct{}
+
+	// Refusals by the tracker of a private torrent since its last successful announce.
+	refusals int
+	// Replaces time.After when set, so tests can drive the announce loop.
+	after func(time.Duration) <-chan time.Time
 }
+
+// A private tracker answers an announce it won't serve with a "failure reason": the torrent isn't
+// registered, the passkey was revoked, the client isn't allowed. Asking again every minute for as
+// long as the torrent stays loaded gets nothing, and can look like abuse by the account the passkey
+// belongs to. So for a private torrent each refusal since the last successful announce doubles the
+// wait from the one-minute floor (1, 2, then 4 minutes), and the announcer stops at the fourth. That
+// rides out a refusal that clears within minutes (maintenance, a rate limit) and ends 7 minutes
+// after the first announce, inside the 10 or so minutes a streaming client keeps a torrent loaded
+// after its last read. Transport and HTTP errors say nothing about the passkey: they keep the floor,
+// and neither add to nor reset the count.
+const maxPrivateTrackerRefusals = 4
 
 type torrentTrackerAnnouncer interface {
 	statusLine() string
@@ -252,8 +269,12 @@ func (me *trackerScraper) Run() {
 		// after first announce, get back to regular "none"
 		e = tracker.None
 		me.t.cl.lock()
+		ar.Interval = me.refusalBackoff(ar)
 		me.lastAnnounce = ar
 		me.t.cl.unlock()
+		if me.refusals >= maxPrivateTrackerRefusals {
+			return
+		}
 
 	recalculate:
 		// Make sure we don't announce for at least a minute since the last one.
@@ -288,12 +309,36 @@ func (me *trackerScraper) Run() {
 		case <-reconsider:
 			// Recalculate the interval.
 			goto recalculate
-		case <-time.After(time.Until(ar.Completed.Add(interval))):
+		case <-me.timeAfter(time.Until(ar.Completed.Add(interval))):
 		}
 	}
 }
 
+func (me *trackerScraper) timeAfter(d time.Duration) <-chan time.Time {
+	if me.after != nil {
+		return me.after(d)
+	}
+	return time.After(d)
+}
+
+// Counts the announce if it was a private torrent's tracker refusing, and returns how long to wait
+// before the next one. See maxPrivateTrackerRefusals. Client lock must be held.
+func (me *trackerScraper) refusalBackoff(ar trackerAnnounceResult) time.Duration {
+	switch {
+	case ar.Err == nil:
+		me.refusals = 0
+	case me.t.isPrivate() && errors.Is(ar.Err, httpTracker.ErrFailureReason):
+		me.refusals++
+		return time.Minute << (me.refusals - 1)
+	}
+	return ar.Interval
+}
+
 func (me *trackerScraper) announceStopped() {
+	if me.refusals >= maxPrivateTrackerRefusals {
+		// The tracker refused our last announces. A "stopped" would only be refused again.
+		return
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), tracker.DefaultTrackerAnnounceTimeout)
 	defer cancel()
 	me.announce(ctx, tracker.Stopped)

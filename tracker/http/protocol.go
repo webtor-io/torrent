@@ -1,6 +1,7 @@
 package httpTracker
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/anacrolix/dht/v2/krpc"
@@ -18,6 +19,10 @@ type HttpResponse struct {
 	// BEP 7
 	Peers6 krpc.CompactIPv6NodeAddrs `bencode:"peers6"`
 }
+
+// Wrapped by the error of an announce the tracker answered with a FailureReason: it was reached and
+// refused, unlike transport errors, HTTP errors and undecodable responses.
+var ErrFailureReason = errors.New("tracker gave failure reason")
 
 type Peers struct {
 	List    []Peer
