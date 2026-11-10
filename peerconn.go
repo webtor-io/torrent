@@ -1383,8 +1383,11 @@ func (c *PeerConn) useful() bool {
 	return false
 }
 
-func makeBuiltinLtepProtocols(pex bool) LocalLtepProtocolMap {
-	ps := []pp.ExtensionName{pp.ExtensionNameMetadata, utHolepunch.ExtensionName}
+func makeBuiltinLtepProtocols(pex, holepunch bool) LocalLtepProtocolMap {
+	ps := []pp.ExtensionName{pp.ExtensionNameMetadata}
+	if holepunch {
+		ps = append(ps, utHolepunch.ExtensionName)
+	}
 	if pex {
 		ps = append(ps, pp.ExtensionNamePex)
 	}
@@ -1395,10 +1398,11 @@ func makeBuiltinLtepProtocols(pex bool) LocalLtepProtocolMap {
 }
 
 func (c *PeerConn) addBuiltinLtepProtocols(pex bool) {
-	if pex && c.t.isPrivate() {
-		// BEP 27: don't offer ut_pex for a private torrent. The client-wide map offers it, so
-		// the conn gets its own map without it.
-		m := makeBuiltinLtepProtocols(false)
+	if c.t.isPrivate() {
+		// BEP 27: a private torrent's peers come from its tracker only. Don't offer ut_pex, which
+		// shares peers, or ut_holepunch, which has us dial and relay addresses other peers name.
+		// The client-wide map offers both, so the conn gets its own map without them.
+		m := makeBuiltinLtepProtocols(false, false)
 		c.LocalLtepProtocolMap = &m
 		return
 	}

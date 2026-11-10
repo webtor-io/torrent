@@ -3441,6 +3441,11 @@ func incHolepunchMessagesSent(msg utHolepunch.Msg) {
 
 func (t *Torrent) handleReceivedUtHolepunchMsg(msg utHolepunch.Msg, sender *PeerConn) error {
 	incHolepunchMessagesReceived(msg)
+	// BEP 27: a private torrent neither dials nor relays addresses its tracker didn't give. A
+	// magnet's conn offered ut_holepunch before the info said private, so its peer may still send.
+	if t.isPrivate() {
+		return nil
+	}
 	switch msg.MsgType {
 	case utHolepunch.Rendezvous:
 		t.logger.Printf("got holepunch rendezvous request for %v from %p", msg.AddrPort, sender)
@@ -3517,6 +3522,10 @@ func addrPortProtocolStr(addrPort netip.AddrPort) string {
 }
 
 func (t *Torrent) trySendHolepunchRendezvous(addrPort netip.AddrPort) error {
+	// BEP 27: a private torrent's peers come from its tracker only, not from other peers' relays.
+	if t.isPrivate() {
+		return errors.New("private torrent")
+	}
 	rzsSent := 0
 	for pc := range t.conns {
 		if !pc.supportsExtension(utHolepunch.ExtensionName) {

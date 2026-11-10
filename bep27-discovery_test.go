@@ -3,6 +3,7 @@ package torrent
 import (
 	"io"
 	"net"
+	"net/netip"
 	"sync"
 	"testing"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/anacrolix/torrent/internal/testutil"
 	"github.com/anacrolix/torrent/metainfo"
 	pp "github.com/anacrolix/torrent/peer_protocol"
+	utHolepunch "github.com/anacrolix/torrent/peer_protocol/ut-holepunch"
 )
 
 // The greeting torrent's info, flagged private (BEP 27) when private is set. Returns the info
@@ -191,10 +193,15 @@ func addBep27TestConn(t *testing.T, tt *Torrent) *PeerConn {
 // Like addBep27TestConn. A peer without the extension protocol (extended false) never sends an
 // extended handshake, so it is listed for PEX when it's added.
 func addBep27TestConnExtended(t *testing.T, tt *Torrent, extended bool) *PeerConn {
+	return addBep27TestConnFrom(t, tt, extended, &net.TCPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 5678})
+}
+
+// Like addBep27TestConnExtended, for a peer at remoteAddr.
+func addBep27TestConnFrom(t *testing.T, tt *Torrent, extended bool, remoteAddr *net.TCPAddr) *PeerConn {
 	cl := tt.cl
 	c := cl.newConnection(nil, newConnectionOpts{
 		network:    "tcp",
-		remoteAddr: &net.TCPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 5678},
+		remoteAddr: remoteAddr,
 	})
 	c.PeerExtensionBytes.SetBit(pp.ExtensionBitLtep, extended)
 	c.setTorrent(tt)
@@ -292,7 +299,7 @@ func TestPexDisabledWhenInfoIsPrivate(t *testing.T) {
 }
 
 // What each side of a real connection offers in its extended handshake: a private torrent's conns
-// don't offer ut_pex, so a well-behaved peer won't send PEX for it either.
+// don't offer ut_pex or ut_holepunch, so a well-behaved peer won't send either for it.
 func TestPrivateTorrentExtendedHandshakeOmitsPex(t *testing.T) {
 	for _, private := range []bool{false, true} {
 		name := "public"
@@ -340,6 +347,8 @@ func TestPrivateTorrentExtendedHandshakeOmitsPex(t *testing.T) {
 					qt.Check(t, qt.Not(qt.Equals(m[pp.ExtensionNameMetadata], 0)))
 					_, offersPex := m[pp.ExtensionNamePex]
 					qt.Check(t, qt.Equals(offersPex, !private))
+					_, offersHolepunch := m[utHolepunch.ExtensionName]
+					qt.Check(t, qt.Equals(offersHolepunch, !private))
 				case <-time.After(10 * time.Second):
 					t.Fatal("no extended handshake")
 				}
@@ -374,6 +383,79 @@ func TestDhtAnnouncePeerIgnoredForPrivateTorrent(t *testing.T) {
 				added = 0
 			}
 			qt.Check(t, qt.Equals(tt.peers.Len(), added))
+		})
+	}
+}
+
+// Bytes queued for the peer of c.
+func bep27BufferedLen(c *PeerConn) int {
+	c.messageWriter.mu.Lock()
+	defer c.messageWriter.mu.Unlock()
+	return c.messageWriter.writeBuffer.Len()
+}
+
+// ut_holepunch has us dial an address another peer names, relay addresses between peers, and ask
+// peers to relay for us. A private torrent's peers come from its tracker only (BEP 27), so it does
+// none of that, even on a magnet's conn that offered ut_holepunch before the info said private.
+func TestPrivateTorrentIgnoresUtHolepunch(t *testing.T) {
+	for _, private := range []bool{false, true} {
+		name := "public"
+		if private {
+			name = "private"
+		}
+		t.Run(name, func(t *testing.T) {
+			cfg := TestingConfig(t)
+			// A Connect has us dial: over TCP to a closed loopback port, it fails at once.
+			cfg.DisableUTP = true
+			cfg.DisableIPv6 = true
+			cl, err := NewClient(cfg)
+			qt.Assert(t, qt.IsNil(err))
+			defer cl.Close()
+			infoBytes := greetingInfoBytes(t, private)
+			tt, _ := cl.AddTorrentOpt(AddTorrentOpts{
+				InfoHash:  metainfo.HashBytes(infoBytes),
+				InfoBytes: infoBytes,
+			})
+			tt.DownloadAll()
+			cl.lock()
+			defer cl.unlock()
+			addHolepunchPeer := func(addr netip.AddrPort) *PeerConn {
+				c := addBep27TestConnFrom(t, tt, true, net.TCPAddrFromAddrPort(addr))
+				c.PeerExtensionIDs = map[pp.ExtensionName]pp.ExtensionNumber{utHolepunch.ExtensionName: 4}
+				return c
+			}
+			sender := addHolepunchPeer(netip.MustParseAddrPort("192.0.2.1:6881"))
+			target := addHolepunchPeer(netip.MustParseAddrPort("192.0.2.2:6881"))
+			sent := !private
+
+			// Not offered with PEX disabled either (TestPrivateTorrentExtendedHandshakeOmitsPex
+			// covers PEX enabled).
+			sender.addBuiltinLtepProtocols(false)
+			_, offered := sender.LocalLtepProtocolMap.toSupportedExtensionDict()[utHolepunch.ExtensionName]
+			qt.Check(t, qt.Equals(offered, !private))
+
+			// Rendezvous: a public torrent relays, sending each side a Connect naming the other.
+			senderLen, targetLen := bep27BufferedLen(sender), bep27BufferedLen(target)
+			qt.Assert(t, qt.IsNil(tt.handleReceivedUtHolepunchMsg(utHolepunch.Msg{
+				MsgType:  utHolepunch.Rendezvous,
+				AddrPort: netip.MustParseAddrPort("192.0.2.2:6881"),
+			}, sender)))
+			qt.Check(t, qt.Equals(bep27BufferedLen(sender) > senderLen, sent))
+			qt.Check(t, qt.Equals(bep27BufferedLen(target) > targetLen, sent))
+
+			// Connect: a public torrent dials the address it names.
+			dialed := "127.0.0.1:1"
+			qt.Assert(t, qt.IsNil(tt.handleReceivedUtHolepunchMsg(utHolepunch.Msg{
+				MsgType:  utHolepunch.Connect,
+				AddrPort: netip.MustParseAddrPort(dialed),
+			}, sender)))
+			qt.Check(t, qt.Equals(tt.connectingToPeerAddr(dialed), sent))
+
+			// A dial that failed: a public torrent asks its peers to relay a rendezvous.
+			senderLen = bep27BufferedLen(sender)
+			err = tt.trySendHolepunchRendezvous(netip.MustParseAddrPort("192.0.2.3:6881"))
+			qt.Check(t, qt.Equals(err == nil, sent))
+			qt.Check(t, qt.Equals(bep27BufferedLen(sender) > senderLen, sent))
 		})
 	}
 }
