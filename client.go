@@ -1788,7 +1788,8 @@ func (cl *Client) onDHTAnnouncePeer(ih metainfo.Hash, ip net.IP, port int, portO
 	cl.lock()
 	defer cl.unlock()
 	t := cl.torrentsByShortHash[ih]
-	if t == nil {
+	// BEP 27: a private torrent takes peers from its tracker only.
+	if t == nil || t.isPrivate() {
 		return
 	}
 	t.addPeers([]PeerInfo{{

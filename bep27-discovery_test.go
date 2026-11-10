@@ -347,3 +347,33 @@ func TestPrivateTorrentExtendedHandshakeOmitsPex(t *testing.T) {
 		})
 	}
 }
+
+// Another node's DHT announce_peer for a private torrent's infohash doesn't give it a peer: BEP 27
+// allows only the tracker's.
+func TestDhtAnnouncePeerIgnoredForPrivateTorrent(t *testing.T) {
+	for _, private := range []bool{false, true} {
+		name := "public"
+		if private {
+			name = "private"
+		}
+		t.Run(name, func(t *testing.T) {
+			cl, err := NewClient(TestingConfig(t))
+			qt.Assert(t, qt.IsNil(err))
+			defer cl.Close()
+			infoBytes := greetingInfoBytes(t, private)
+			tt, _ := cl.AddTorrentOpt(AddTorrentOpts{
+				InfoHash:  metainfo.HashBytes(infoBytes),
+				InfoBytes: infoBytes,
+			})
+			// The torrent doesn't want conns, so a peer that is added isn't dialed.
+			cl.onDHTAnnouncePeer(tt.InfoHash(), net.IPv4(192, 0, 2, 1), 6881, true)
+			cl.rLock()
+			defer cl.rUnlock()
+			added := 1
+			if private {
+				added = 0
+			}
+			qt.Check(t, qt.Equals(tt.peers.Len(), added))
+		})
+	}
+}
