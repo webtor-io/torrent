@@ -235,3 +235,29 @@ func TestTrackerFailuresKeepTheFloor(t *testing.T) {
 		})
 	}
 }
+
+// The status line of a private announcer that gave up says it stopped, rather than promising the
+// next announce its last wait would have led to. It keeps the refusal, which operators classify by.
+func TestPrivateTrackerStatusAfterRefusals(t *testing.T) {
+	tt := newScraperTestTorrent(t, true)
+	_, trackerUrl := startScriptedTracker(t, trackerRefusal)
+	ts := startTestScraper(t, tt, trackerUrl)
+	status := func() string {
+		tt.cl.rLock()
+		defer tt.cl.rUnlock()
+		return ts.statusLine()
+	}
+	for range maxPrivateTrackerRefusals - 1 {
+		select {
+		case w := <-ts.waits:
+			// Still backing off: the line names the wait.
+			qt.Check(t, qt.Matches(status(), `next ann: \d.*`))
+			w.fire <- time.Now()
+		case <-time.After(10 * time.Second):
+			t.Fatal("no wait")
+		}
+	}
+	ts.checkStops(t)
+	qt.Check(t, qt.Matches(status(),
+		`next ann: stopped after 4 refusals, last ann: announcing: tracker gave failure reason: "torrent not registered"`))
+}

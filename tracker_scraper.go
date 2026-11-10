@@ -63,6 +63,10 @@ func (ts *trackerScraper) statusLine() string {
 	var w bytes.Buffer
 	fmt.Fprintf(&w, "next ann: %v, last ann: %v",
 		func() string {
+			if ts.refusals >= maxPrivateTrackerRefusals {
+				// Run has returned; the interval is the wait it gave up instead of.
+				return fmt.Sprintf("stopped after %d refusals", ts.refusals)
+			}
 			na := time.Until(ts.lastAnnounce.Completed.Add(ts.lastAnnounce.Interval))
 			if na > 0 {
 				na /= time.Second
