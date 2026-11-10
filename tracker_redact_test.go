@@ -99,11 +99,16 @@ func TestTrackerAnnounceLogsOmitTrackerKey(t *testing.T) {
 		return false
 	}, 10*time.Second, 10*time.Millisecond)
 	out := logs.String()
+	// The status page lists each announcer by its URL; operators read it on private torrents too.
+	var clientStatus strings.Builder
+	cl.WriteStatus(&clientStatus)
 	// The lines this test guards were written, and still name the tracker.
 	require.Contains(t, out, "announce failed")
 	require.Contains(t, out, "error parsing tracker url")
 	assert.Contains(t, out, "urlKey="+srv.URL+" ")
-	for _, s := range []string{out, status, lastErr} {
+	// The announcer's own row, not the error quoting the request: the tracker stays identifiable.
+	assert.Contains(t, clientStatus.String(), "\n    \""+srv.URL+"\" ")
+	for _, s := range []string{out, status, lastErr, clientStatus.String()} {
 		assert.NotContains(t, s, testTrackerKey)
 		assert.NotContains(t, s, "/announce")
 	}

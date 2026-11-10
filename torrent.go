@@ -946,7 +946,8 @@ func (t *Torrent) writeStatus(w io.Writer) {
 			},
 		)
 		for _, ta := range sortedTrackerAnnouncers {
-			fmt.Fprintf(tw, "    %q\t%v\n", ta.URL(), ta.statusLine())
+			// Status pages and diagnostics are read by people who are not the key's owner.
+			fmt.Fprintf(tw, "    %q\t%v\n", shared.RedactUrl(ta.URL().String()), ta.statusLine())
 		}
 		tw.Flush()
 	}
