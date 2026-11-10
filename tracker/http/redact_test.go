@@ -17,6 +17,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/anacrolix/torrent/bencode"
+	"github.com/anacrolix/torrent/tracker/shared"
 	"github.com/anacrolix/torrent/types/infohash"
 )
 
@@ -132,7 +133,7 @@ func TestAnnounceDecodeErrorIsTruncated(t *testing.T) {
 	assert.NotContains(t, err.Error(), testKey)
 	prefix := fmt.Sprintf("error decoding response from tracker (%d bytes): ", len(body))
 	assert.True(t, strings.HasPrefix(err.Error(), prefix), "%v", err)
-	assert.LessOrEqual(t, len(err.Error()), len(prefix+"...")+maxTrackerTextLen)
+	assert.LessOrEqual(t, len(err.Error()), len(prefix+"...")+shared.MaxTrackerTextLen)
 }
 
 // A valid compact reply whose peers string makes it bodyLen bytes or a little more.
@@ -205,7 +206,7 @@ func TestAnnounceFailureReasonIsTruncated(t *testing.T) {
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), testKey)
 	assert.True(t, strings.HasPrefix(err.Error(), `tracker gave failure reason: "Unregistered torrent xxx`), "%v", err)
-	assert.LessOrEqual(t, len(err.Error()), len(`tracker gave failure reason: ""...`)+maxTrackerTextLen)
+	assert.LessOrEqual(t, len(err.Error()), len(`tracker gave failure reason: ""...`)+shared.MaxTrackerTextLen)
 }
 
 func TestScrapeOmitsTrackerUrl(t *testing.T) {
@@ -218,4 +219,55 @@ func TestScrapeOmitsTrackerUrl(t *testing.T) {
 	assertNoTrackerUrl(t, err.Error())
 	assertNoTrackerUrl(t, logged.String())
 	assert.Contains(t, logged.String(), srv.URL)
+}
+
+func TestAnnounceFailureReasonRedactsEchoedKey(t *testing.T) {
+	var reason string
+	srv := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		b, err := bencode.Marshal(map[string]string{"failure reason": reason})
+		if err != nil {
+			panic(err)
+		}
+		w.Write(b)
+	})
+	announce := func(rawUrl string) error {
+		u, err := url.Parse(rawUrl)
+		require.NoError(t, err)
+		_, err = NewClient(u, NewClientOpts{}).Announce(context.Background(), AnnounceRequest{}, AnnounceOpt{})
+		require.Error(t, err)
+		return err
+	}
+	host := strings.TrimPrefix(srv.URL, "http://")
+	// Trackers quote a refused key back, and truncation alone keeps a short reason whole.
+	reason = "Invalid passkey (33 - " + testKey + ")"
+	for _, rawUrl := range []string{
+		srv.URL + "/" + testKey + "/announce",
+		srv.URL + "/announce?passkey=" + testKey,
+		"http://u:" + testKey + "@" + host + "/announce",
+	} {
+		assert.EqualError(t, announce(rawUrl), `tracker gave failure reason: "Invalid passkey (33 - <redacted>)"`, rawUrl)
+	}
+
+	// Redacted before the cut: a key the cut ran through would leave its first bytes.
+	reason = strings.Repeat("x", shared.MaxTrackerTextLen-6) + testKey + strings.Repeat("x", 1000)
+	err := announce(srv.URL + "/announce?passkey=" + testKey)
+	assert.NotContains(t, err.Error(), testKey[:6])
+	assert.LessOrEqual(t, len(err.Error()), len(`tracker gave failure reason: ""...`)+shared.MaxTrackerTextLen)
+
+	// Short query values are left alone.
+	reason = "id 1 is not registered"
+	assert.EqualError(t, announce(srv.URL+"/announce?id=1"), `tracker gave failure reason: "id 1 is not registered"`)
+}
+
+func TestAnnounceDecodeErrorRedactsEchoedKey(t *testing.T) {
+	// The decoder quotes a dict key it cannot pair with a value.
+	key := "passkey " + testKey
+	body := fmt.Sprintf("d%d:%se", len(key), key)
+	srv := serve(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(body))
+	})
+	_, err := privateTrackerClient(t, srv).Announce(context.Background(), AnnounceRequest{}, AnnounceOpt{})
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), testKey)
+	assert.Contains(t, err.Error(), "passkey <redacted>")
 }

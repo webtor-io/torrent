@@ -3,10 +3,12 @@ package tracker
 import (
 	"context"
 	"encoding/binary"
+	"net/url"
 
 	"github.com/anacrolix/generics"
 
 	trHttp "github.com/anacrolix/torrent/tracker/http"
+	"github.com/anacrolix/torrent/tracker/shared"
 	"github.com/anacrolix/torrent/tracker/udp"
 	"github.com/anacrolix/torrent/types/infohash"
 )
@@ -14,6 +16,7 @@ import (
 type udpClient struct {
 	cl         *udp.ConnClient
 	requestUri string
+	url        *url.URL
 }
 
 func (c *udpClient) Scrape(ctx context.Context, ihs []infohash.T) (out udp.ScrapeResponse, err error) {
@@ -42,6 +45,10 @@ func (c *udpClient) Announce(
 		req.IPAddress = binary.BigEndian.Uint32(opts.ClientIp4.To4())
 	}
 	h, nas, err := c.cl.Announce(ctx, req, udp.Options{RequestUri: c.requestUri})
+	if er, ok := err.(udp.ErrorResponse); ok {
+		// The tracker got the path and query as URL data (BEP 41), and can quote the key back.
+		err = udp.ErrorResponse{Message: shared.RedactEcho(er.Message, c.url)}
+	}
 	if err != nil {
 		return
 	}

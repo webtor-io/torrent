@@ -22,22 +22,15 @@ import (
 
 var vars = expvar.NewMap("tracker/http")
 
-const (
-	// We send no numwant, so a tracker returns its default number of peers, commonly 50. A compact
-	// reply spends 6 bytes on an IPv4 peer and 18 on an IPv6 one, a dictionary reply about 70, so
-	// even thousands of peers fit far below this. It bounds what a tracker can make us buffer.
-	maxResponseBodyLen = 1 << 20
-	// Bounds the tracker's own text that goes into an error and from there into logs. Refusals
-	// ("unregistered torrent") are a few dozen bytes, and operators classify them by that text, so
-	// this keeps them whole.
-	maxTrackerTextLen = 256
-)
+// We send no numwant, so a tracker returns its default number of peers, commonly 50. A compact
+// reply spends 6 bytes on an IPv4 peer and 18 on an IPv6 one, a dictionary reply about 70, so even
+// thousands of peers fit far below this. It bounds what a tracker can make us buffer.
+const maxResponseBodyLen = 1 << 20
 
-func truncateTrackerText(s string) string {
-	if len(s) <= maxTrackerTextLen {
-		return s
-	}
-	return s[:maxTrackerTextLen] + "..."
+// The tracker's own text, fit for an error: it can quote our key back, and is as long as the
+// tracker likes.
+func (cl Client) trackerText(s string) string {
+	return shared.TruncateTrackerText(shared.RedactEcho(s, cl.url_))
 }
 
 func setAnnounceParams(_url *url.URL, ar *AnnounceRequest, opts AnnounceOpt) {
@@ -149,11 +142,11 @@ func (cl Client) Announce(ctx context.Context, ar AnnounceRequest, opt AnnounceO
 		err = nil
 	} else if err != nil {
 		// The decoder quotes dict keys, which are the tracker's.
-		err = fmt.Errorf("error decoding response from tracker (%d bytes): %s", len(body), truncateTrackerText(err.Error()))
+		err = fmt.Errorf("error decoding response from tracker (%d bytes): %s", len(body), cl.trackerText(err.Error()))
 		return
 	}
 	if trackerResponse.FailureReason != "" {
-		err = fmt.Errorf("tracker gave failure reason: %q", truncateTrackerText(trackerResponse.FailureReason))
+		err = fmt.Errorf("tracker gave failure reason: %q", cl.trackerText(trackerResponse.FailureReason))
 		return
 	}
 	vars.Add("successful http announces", 1)

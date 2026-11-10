@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/anacrolix/torrent/tracker/shared"
 	"github.com/anacrolix/torrent/tracker/udp"
 )
 
@@ -85,4 +86,52 @@ func TestNewClientParseErrorOmitsUrl(t *testing.T) {
 	require.Error(t, err)
 	assert.NotContains(t, err.Error(), testKey)
 	assert.NotContains(t, err.Error(), "/announce")
+}
+
+// A UDP tracker that hands out a connection ID and answers every announce with an error carrying
+// msg.
+func udpErrorTracker(t *testing.T, msg string) string {
+	pc, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { pc.Close() })
+	go func() {
+		var b [2048]byte
+		for {
+			n, addr, err := pc.ReadFrom(b[:])
+			if err != nil {
+				return
+			}
+			var h udp.RequestHeader
+			if udp.Read(bytes.NewReader(b[:n]), &h) != nil {
+				continue
+			}
+			var w bytes.Buffer
+			if h.Action == udp.ActionConnect {
+				udp.Write(&w, udp.ResponseHeader{Action: udp.ActionConnect, TransactionId: h.TransactionId})
+				udp.Write(&w, udp.ConnectionResponse{ConnectionId: 42})
+			} else {
+				udp.Write(&w, udp.ResponseHeader{Action: udp.ActionError, TransactionId: h.TransactionId})
+				w.WriteString(msg)
+			}
+			pc.WriteTo(w.Bytes(), addr)
+		}
+	}()
+	return pc.LocalAddr().String()
+}
+
+func TestUdpErrorResponseRedactsEchoedKey(t *testing.T) {
+	// The tracker got the path and query as URL data, and quotes the key back past where the
+	// message is cut.
+	msg := "Invalid passkey (33 - " + testKey + ")" + strings.Repeat("x", 2000)
+	addr := udpErrorTracker(t, msg)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, err := Announce{
+		TrackerUrl: "udp://" + addr + "/" + testKey + "/announce?passkey=" + testKey,
+		Context:    ctx,
+	}.Do()
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), testKey)
+	assert.True(t, strings.HasPrefix(err.Error(), "error response: `Invalid passkey (33 - <redacted>)xxx"), "%v", err)
+	assert.LessOrEqual(t, len(err.Error()), len("error response: ``...")+shared.MaxTrackerTextLen)
 }
