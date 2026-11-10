@@ -308,14 +308,26 @@ func TestPrivateTorrentExtendedHandshakeOmitsPex(t *testing.T) {
 			newClient := func() (*Client, <-chan map[pp.ExtensionName]pp.ExtensionNumber) {
 				received := make(chan map[pp.ExtensionName]pp.ExtensionNumber, 10)
 				cfg := TestingConfig(t)
+				// One TCP conn is enough, as in TestUserLtep. A uTP packet arriving while
+				// Client.Close runs its socket closers under the client lock can deadlock with
+				// the uTP firewall callback, which takes the client lock too.
+				cfg.DisableUTP = true
+				cfg.DisableIPv6 = true
 				cfg.Callbacks.ReadExtendedHandshake = func(_ *PeerConn, msg *pp.ExtendedHandshakeMessage) {
-					received <- msg.M
+					// Called with the client lock held, so it mustn't block. Only the first matters.
+					select {
+					case received <- msg.M:
+					default:
+					}
 				}
 				cl, err := NewClient(cfg)
 				qt.Assert(t, qt.IsNil(err))
 				t.Cleanup(func() { cl.Close() })
 				tt, _ := cl.AddTorrentOpt(opts)
 				tt.DownloadAll()
+				// A torrent doesn't want conns while its pieces are being checked, and a dial
+				// it refuses then isn't retried. Finish the check first.
+				qt.Assert(t, qt.IsNil(tt.VerifyData()))
 				return cl, received
 			}
 			cl1, fromCl2 := newClient()
