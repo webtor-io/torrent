@@ -1,8 +1,10 @@
 package torrent
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"math/rand/v2"
 	"net/http"
 	"time"
@@ -12,6 +14,7 @@ import (
 
 	"github.com/anacrolix/torrent/bencode"
 	"github.com/anacrolix/torrent/metainfo"
+	"github.com/anacrolix/torrent/tracker/shared"
 )
 
 // Add HTTP endpoints that serve the metainfo. They will be used if the torrent info isn't obtained
@@ -39,7 +42,8 @@ func (t *Torrent) sourcer(source string) {
 		if err == nil || ctx.Err() != nil {
 			return
 		}
-		t.slogger().Warn("error using torrent source", "source", source, "err", err)
+		// A private tracker's .torrent download link carries the account's key.
+		t.slogger().Warn("error using torrent source", "source", shared.RedactUrl(source), "err", err)
 		if !retry.Ok {
 			return
 		}
@@ -71,13 +75,23 @@ func (t *Torrent) trySource(source string) (retry g.Option[time.Duration], err e
 	return
 }
 
+// The largest info dicts seen in the wild are about 14 MiB (see maxMetadataSize, which caps them at
+// 16 MiB when peers hand them over). A hybrid torrent adds v2 piece layers outside the info dict,
+// 32 bytes for each 20-byte v1 piece hash, so at most 1.6 times as much again: about 42 MiB in all.
+// magnet2torrent, which passes the metainfo on, caps its gRPC replies at 50 MiB, so nothing larger
+// could leave it anyway. It bounds what a source can make us buffer.
+const maxSourceBodyLen = 50 << 20
+
 func getTorrentSource(ctx context.Context, source string, hc *http.Client) (mi metainfo.MetaInfo, err error) {
+	// Both errors quote the source URL, and with it a private tracker's key.
 	var req *http.Request
 	if req, err = http.NewRequestWithContext(ctx, http.MethodGet, source, nil); err != nil {
+		err = shared.RedactUrlError(err)
 		return
 	}
 	var resp *http.Response
 	if resp, err = hc.Do(req); err != nil {
+		err = shared.RedactUrlError(err)
 		return
 	}
 	defer resp.Body.Close()
@@ -85,6 +99,23 @@ func getTorrentSource(ctx context.Context, source string, hc *http.Client) (mi m
 		err = fmt.Errorf("unexpected response status code: %v", resp.StatusCode)
 		return
 	}
-	err = bencode.NewDecoder(resp.Body).Decode(&mi)
+	// A magnet names its own sources, so whoever crafts one decides how much we read.
+	var body []byte
+	if body, err = io.ReadAll(io.LimitReader(resp.Body, maxSourceBodyLen+1)); err != nil {
+		return
+	}
+	if len(body) > maxSourceBodyLen {
+		err = fmt.Errorf("metainfo source response exceeds %d bytes", maxSourceBodyLen)
+		return
+	}
+	// As before, bytes after the metainfo are ignored. No string is longer than the body, so a
+	// declared length past it is refused before the decoder allocates it (default bound: 128 MiB).
+	dec := bencode.NewDecoder(bytes.NewReader(body))
+	dec.MaxStrLen = int64(len(body))
+	if err = dec.Decode(&mi); err != nil {
+		// The decoder quotes dict keys, which are the source's: it can echo our key, at any length.
+		err = fmt.Errorf("error decoding metainfo source response (%d bytes): %s",
+			len(body), shared.TruncateTrackerText(shared.RedactEcho(err.Error(), req.URL)))
+	}
 	return
 }

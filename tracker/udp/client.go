@@ -12,6 +12,8 @@ import (
 	"github.com/anacrolix/dht/v2/krpc"
 	"github.com/anacrolix/log"
 	"github.com/protolambda/ctxlock"
+
+	"github.com/anacrolix/torrent/tracker/shared"
 )
 
 // Client interacts with UDP trackers via its Writer and Dispatcher. It has no knowledge of
@@ -197,8 +199,10 @@ type ErrorResponse struct {
 	Message string
 }
 
+// The message is the tracker's text and goes into logs. It is cut here rather than where it is
+// received, so that the announcer can first redact echoes of its URL data from the whole of it.
 func (me ErrorResponse) Error() string {
-	return fmt.Sprintf("error response: %#q", me.Message)
+	return fmt.Sprintf("error response: %#q", shared.TruncateTrackerText(me.Message))
 }
 
 func (cl *Client) request(

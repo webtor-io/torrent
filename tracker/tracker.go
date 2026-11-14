@@ -63,8 +63,10 @@ func (me Announce) Do() (res AnnounceResponse, err error) {
 			DialContext: me.DialContext,
 			ServerName:  me.ServerName,
 		},
-		UdpNetwork:   me.UdpNetwork,
-		Logger:       me.Logger.WithContextValue(fmt.Sprintf("tracker client for %q", me.TrackerUrl)),
+		UdpNetwork: me.UdpNetwork,
+		// The path and query hold a private tracker's key; a UDP tracker gets them as BEP 41 URL
+		// data.
+		Logger:       me.Logger.WithContextValue(fmt.Sprintf("tracker client for %q", shared.RedactUrl(me.TrackerUrl))),
 		ListenPacket: me.ListenPacket,
 	})
 	if err != nil {

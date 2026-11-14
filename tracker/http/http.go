@@ -23,6 +23,17 @@ import (
 
 var vars = expvar.NewMap("tracker/http")
 
+// We send no numwant, so a tracker returns its default number of peers, commonly 50. A compact
+// reply spends 6 bytes on an IPv4 peer and 18 on an IPv6 one, a dictionary reply about 70, so even
+// thousands of peers fit far below this. It bounds what a tracker can make us buffer.
+const maxResponseBodyLen = 1 << 20
+
+// The tracker's own text, fit for an error: it can quote our key back, and is as long as the
+// tracker likes.
+func (cl Client) trackerText(s string) string {
+	return shared.TruncateTrackerText(shared.RedactEcho(s, cl.url_))
+}
+
 func setAnnounceParams(_url *url.URL, ar *AnnounceRequest, opts AnnounceOpt) {
 	q := url.Values{}
 
@@ -108,25 +119,37 @@ func (cl Client) Announce(ctx context.Context, ar AnnounceRequest, opt AnnounceO
 	req.Host = opt.HostHeader
 	resp, err := cl.hc.Do(req)
 	if err != nil {
+		// The error quotes the request URL: a private tracker's key, and our announce parameters.
+		err = shared.RedactUrlError(err)
 		return
 	}
 	defer resp.Body.Close()
-	var buf bytes.Buffer
-	io.Copy(&buf, resp.Body)
+	// As before, a read error is not checked: a cut body fails to decode below.
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodyLen+1))
+	// Neither the body nor the tracker's reason phrase goes into errors: either can echo the
+	// request URL, and both are as long as the tracker likes.
+	status := fmt.Sprintf("%d %s", resp.StatusCode, http.StatusText(resp.StatusCode))
+	if len(body) > maxResponseBodyLen {
+		err = fmt.Errorf("response from tracker: %s: body exceeds %d bytes", status, maxResponseBodyLen)
+		return
+	}
 	if resp.StatusCode != 200 {
-		err = fmt.Errorf("response from tracker: %s: %q", resp.Status, buf.Bytes())
+		err = fmt.Errorf("response from tracker: %s: %d bytes", status, len(body))
 		return
 	}
 	var trackerResponse HttpResponse
-	err = bencode.Unmarshal(buf.Bytes(), &trackerResponse)
-	if _, ok := err.(bencode.ErrUnusedTrailingBytes); ok {
-		err = nil
-	} else if err != nil {
-		err = fmt.Errorf("error decoding %q: %s", buf.Bytes(), err)
+	// Bytes after the reply are ignored, as they were. No string can be longer than the reply
+	// that carries it; without that bound the decoder allocates whatever length the reply
+	// declares (up to bencode's 128 MiB default) before it finds the reply ends there.
+	dec := bencode.NewDecoder(bytes.NewReader(body))
+	dec.MaxStrLen = int64(len(body))
+	if err = dec.Decode(&trackerResponse); err != nil {
+		// The decoder quotes dict keys, which are the tracker's.
+		err = fmt.Errorf("error decoding response from tracker (%d bytes): %s", len(body), cl.trackerText(err.Error()))
 		return
 	}
 	if trackerResponse.FailureReason != "" {
-		err = fmt.Errorf("tracker gave failure reason: %q", trackerResponse.FailureReason)
+		err = fmt.Errorf("tracker gave failure reason: %q", cl.trackerText(trackerResponse.FailureReason))
 		return
 	}
 	vars.Add("successful http announces", 1)

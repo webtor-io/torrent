@@ -14,6 +14,7 @@ import (
 
 	"github.com/anacrolix/torrent/tracker"
 	httpTracker "github.com/anacrolix/torrent/tracker/http"
+	"github.com/anacrolix/torrent/tracker/shared"
 	"github.com/anacrolix/torrent/webtorrent"
 )
 
@@ -57,6 +58,8 @@ func (me *websocketTrackers) Get(url string, infoHash [20]byte) (*webtorrent.Tra
 	defer me.mu.Unlock()
 	value, ok := me.clients[url]
 	if !ok {
+		// Private trackers put the account's key in the URL's path or query.
+		logUrl := shared.RedactUrl(url)
 		dialer := &websocket.Dialer{
 			Proxy:            me.Proxy,
 			NetDialContext:   me.DialContext,
@@ -71,7 +74,7 @@ func (me *websocketTrackers) Get(url string, infoHash [20]byte) (*webtorrent.Tra
 				OnConn:             me.OnConn,
 				Logger: me.Logger.WithText(
 					func(m log.Msg) string {
-						return fmt.Sprintf("tracker client for %q: %v", url, m)
+						return fmt.Sprintf("tracker client for %q: %v", logUrl, m)
 					},
 				),
 				WebsocketTrackerHttpHeader: me.WebsocketTrackerHttpHeader,
@@ -117,7 +120,7 @@ func (me *websocketTrackers) Get(url string, infoHash [20]byte) (*webtorrent.Tra
 		}
 		value.TrackerClient.Start(func(err error) {
 			if err != nil {
-				me.Logger.Printf("error running tracker client for %q: %v", url, err)
+				me.Logger.Printf("error running tracker client for %q: %v", logUrl, err)
 			}
 		})
 		if me.clients == nil {
