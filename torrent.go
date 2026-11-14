@@ -204,6 +204,9 @@ type Torrent struct {
 
 	// Disable actions after updating piece priorities, for benchmarking.
 	disableTriggers bool
+	// While set, openNewConns only records that it was called. See RefreshCompletionsFromStorage.
+	deferOpenNewConns  bool
+	openNewConnsWanted bool
 	// See AddTorrentOpts.DisableInitialPieceCheck
 	initialPieceCheckDisabled bool
 	// See AddTorrentOpts.IgnoreUnverifiedPieceCompletion
@@ -1723,6 +1726,10 @@ func (t *Torrent) maxHalfOpen() int {
 }
 
 func (t *Torrent) openNewConns() (initiated int) {
+	if t.deferOpenNewConns {
+		t.openNewConnsWanted = true
+		return
+	}
 	defer t.updateWantPeersEvent()
 	for t.peers.Len() != 0 {
 		if !t.wantOutgoingConns() {
