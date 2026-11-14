@@ -248,6 +248,44 @@ func (p *Piece) RefreshCompletionFromStorage() bool {
 	return p.t.updatePieceCompletion(p.index)
 }
 
+// RefreshCompletionsFromStorage does what Piece.RefreshCompletionFromStorage does for each of the
+// given pieces, under one acquisition of the client lock, and reports how many pieces' cached
+// completion changed. Each piece gets the same state updates and piece state change events as if
+// refreshed on its own, and the Torrent's completion is updated; new conns are opened once, after
+// the last piece, rather than after each.
+//
+// This is for callers that learn of many completions at once, such as Clients sharing a storage
+// whose completion store one of them updates: refreshing piece by piece, a Client takes the lock
+// and re-evaluates new conns per piece, and falls behind. The lock is held for the whole batch, so
+// callers that care how long readers wait should bound its size.
+//
+// Indexes must be valid for the Torrent's info. On a closed Torrent it does nothing and returns 0.
+//
+// The caller must NOT hold the client lock.
+func (t *Torrent) RefreshCompletionsFromStorage(pieces []int) (changed int) {
+	t.cl.lock()
+	defer t.cl.unlock()
+	if t.closed.IsSet() {
+		return 0
+	}
+	// A piece that completes or changes pending state opens new conns, and each of those calls
+	// checks the whole piece request order. Once for the batch, on its final state, is enough.
+	t.deferOpenNewConns = true
+	defer func() {
+		t.deferOpenNewConns = false
+		if t.openNewConnsWanted {
+			t.openNewConnsWanted = false
+			t.openNewConns()
+		}
+	}()
+	for _, i := range pieces {
+		if t.updatePieceCompletion(i) {
+			changed++
+		}
+	}
+	return
+}
+
 // Forces the piece data to be rehashed. This might be a temporary method until
 // an event-based one is created. Possibly this blocking style is more suited to
 // external control of hashing concurrency.
