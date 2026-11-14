@@ -149,7 +149,7 @@ func (cl Client) Announce(ctx context.Context, ar AnnounceRequest, opt AnnounceO
 		return
 	}
 	if trackerResponse.FailureReason != "" {
-		err = fmt.Errorf("tracker gave failure reason: %q", cl.trackerText(trackerResponse.FailureReason))
+		err = fmt.Errorf("%w: %q", ErrFailureReason, cl.trackerText(trackerResponse.FailureReason))
 		return
 	}
 	vars.Add("successful http announces", 1)

@@ -204,6 +204,9 @@ type Torrent struct {
 
 	// Disable actions after updating piece priorities, for benchmarking.
 	disableTriggers bool
+	// While set, openNewConns only records that it was called. See RefreshCompletionsFromStorage.
+	deferOpenNewConns  bool
+	openNewConnsWanted bool
 	// See AddTorrentOpts.DisableInitialPieceCheck
 	initialPieceCheckDisabled bool
 	// See AddTorrentOpts.IgnoreUnverifiedPieceCompletion
@@ -1004,6 +1007,19 @@ func (t *Torrent) haveInfo() bool {
 	return t.info != nil
 }
 
+// isPrivate reports whether the torrent's metainfo carries BEP 27's
+// `private=1` flag. Private torrents must not be announced via DHT, must
+// not participate in PEX, and must not be discovered or announced via
+// Local Peer Discovery (BEP 14). Returns false when info has not yet been
+// loaded (e.g. magnet that hasn't fetched metadata yet) — callers that need
+// to be conservative should also check haveInfo().
+func (t *Torrent) isPrivate() bool {
+	if t.info == nil {
+		return false
+	}
+	return t.info.Private != nil && *t.info.Private
+}
+
 // Returns a run-time generated MetaInfo that includes the info bytes and
 // announce-list as currently known to the client.
 func (t *Torrent) newMetaInfo() metainfo.MetaInfo {
@@ -1710,6 +1726,10 @@ func (t *Torrent) maxHalfOpen() int {
 }
 
 func (t *Torrent) openNewConns() (initiated int) {
+	if t.deferOpenNewConns {
+		t.openNewConnsWanted = true
+		return
+	}
 	defer t.updateWantPeersEvent()
 	for t.peers.Len() != 0 {
 		if !t.wantOutgoingConns() {
@@ -2325,12 +2345,27 @@ func (t *Torrent) timeboxedAnnounceToDht(s DhtServer) error {
 	if err != nil {
 		return err
 	}
-	select {
-	case <-t.closed.Done():
-	case <-time.After(5 * time.Minute):
+	defer stop()
+	timeout := time.After(5 * time.Minute)
+	gotInfo := t.gotMetainfoC
+	for {
+		select {
+		case <-t.closed.Done():
+			return nil
+		case <-timeout:
+			return nil
+		case <-gotInfo:
+			// A magnet's announce runs while the info is fetched. If the info says private
+			// (BEP 27), stop now rather than when the announce times out.
+			t.cl.rLock()
+			private := t.isPrivate()
+			t.cl.rUnlock()
+			if private {
+				return nil
+			}
+			gotInfo = nil
+		}
 	}
-	stop()
-	return nil
 }
 
 func (t *Torrent) dhtAnnouncer(s DhtServer) {
@@ -2340,6 +2375,13 @@ func (t *Torrent) dhtAnnouncer(s DhtServer) {
 	for {
 		for {
 			if t.closed.IsSet() {
+				return
+			}
+			// BEP 27: private torrents must not be announced via DHT. We re-check
+			// every loop because info may be loaded later (e.g. via magnet). Once
+			// it says private it can't change, so unlike upstream (which waits
+			// here) we end the announcer rather than wake it on every event.
+			if t.isPrivate() {
 				return
 			}
 			// We're also announcing ourselves as a listener, so we don't just want peer addresses.
@@ -2471,8 +2513,9 @@ func (t *Torrent) addPeerConn(c *PeerConn) (err error) {
 	}
 	t.conns[c] = struct{}{}
 	t.cl.event.Broadcast()
-	// We'll never receive the "p" extended handshake parameter.
-	if !t.cl.config.DisablePEX && !c.PeerExtensionBytes.SupportsExtended() {
+	// We'll never receive the "p" extended handshake parameter. A private torrent's peers are
+	// never shared (BEP 27).
+	if !t.cl.config.DisablePEX && !c.PeerExtensionBytes.SupportsExtended() && !t.isPrivate() {
 		t.pex.Add(c)
 	}
 	return nil
@@ -3405,6 +3448,11 @@ func incHolepunchMessagesSent(msg utHolepunch.Msg) {
 
 func (t *Torrent) handleReceivedUtHolepunchMsg(msg utHolepunch.Msg, sender *PeerConn) error {
 	incHolepunchMessagesReceived(msg)
+	// BEP 27: a private torrent neither dials nor relays addresses its tracker didn't give. A
+	// magnet's conn offered ut_holepunch before the info said private, so its peer may still send.
+	if t.isPrivate() {
+		return nil
+	}
 	switch msg.MsgType {
 	case utHolepunch.Rendezvous:
 		t.logger.Printf("got holepunch rendezvous request for %v from %p", msg.AddrPort, sender)
@@ -3481,6 +3529,10 @@ func addrPortProtocolStr(addrPort netip.AddrPort) string {
 }
 
 func (t *Torrent) trySendHolepunchRendezvous(addrPort netip.AddrPort) error {
+	// BEP 27: a private torrent's peers come from its tracker only, not from other peers' relays.
+	if t.isPrivate() {
+		return errors.New("private torrent")
+	}
 	rzsSent := 0
 	for pc := range t.conns {
 		if !pc.supportsExtension(utHolepunch.ExtensionName) {
