@@ -261,3 +261,46 @@ func TestPrivateTrackerStatusAfterRefusals(t *testing.T) {
 	qt.Check(t, qt.Matches(status(),
 		`next ann: stopped after 4 refusals, last ann: announcing: tracker gave failure reason: "torrent not registered"`))
 }
+
+// PrivateTrackerRefused hears of a private torrent's tracker refusing once per run of refusals,
+// with the tracker's failure reason; never of a public torrent's tracker or of other errors.
+func TestPrivateTrackerRefusedCallback(t *testing.T) {
+	for _, c := range []struct {
+		name      string
+		private   bool
+		responses []string
+		// The wait after an announce is asked for once the announce is handled, callback included.
+		waits int
+		want  int
+	}{
+		{"private, two runs of refusals", true,
+			[]string{trackerRefusal, trackerRefusal, trackerSuccess, trackerUnavailable, trackerRefusal}, 5, 2},
+		{"public torrent refused", false, []string{trackerRefusal}, 3, 0},
+		{"private, tracker http error", true, []string{trackerUnavailable}, 3, 0},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			tt := newScraperTestTorrent(t, c.private)
+			var mu sync.Mutex
+			var errs []error
+			tt.cl.lock()
+			tt.cl.config.Callbacks.PrivateTrackerRefused = append(tt.cl.config.Callbacks.PrivateTrackerRefused,
+				func(got *Torrent, err error) {
+					qt.Check(t, qt.Equals(got, tt))
+					mu.Lock()
+					errs = append(errs, err)
+					mu.Unlock()
+				})
+			tt.cl.unlock()
+			_, trackerUrl := startScriptedTracker(t, c.responses...)
+			ts := startTestScraper(t, tt, trackerUrl)
+			ts.runWaits(t, c.waits)
+			mu.Lock()
+			defer mu.Unlock()
+			qt.Assert(t, qt.HasLen(errs, c.want))
+			for _, err := range errs {
+				qt.Check(t, qt.ErrorIs(err, httpTracker.ErrFailureReason))
+				qt.Check(t, qt.StringContains(err.Error(), `"torrent not registered"`))
+			}
+		})
+	}
+}

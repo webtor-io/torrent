@@ -38,6 +38,13 @@ type Callbacks struct {
 	// Sends status event updates. Useful to inform the user of specific events as they happen,
 	// for logging or to action on.
 	StatusUpdated []func(StatusUpdatedEvent)
+
+	// Called when a tracker of a private torrent refuses an announce with a failure reason, once
+	// per run of refusals: on the first since its announcer started or last succeeded (see
+	// maxPrivateTrackerRefusals). The error wraps tracker/http.ErrFailureReason; its text is the
+	// tracker's, with the announce URL's secrets redacted. Not called for transport or HTTP errors,
+	// nor for UDP trackers. The Client lock is held.
+	PrivateTrackerRefused []func(*Torrent, error)
 }
 
 type ReceivedUsefulDataEvent = PeerMessageEvent
