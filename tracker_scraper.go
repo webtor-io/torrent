@@ -333,6 +333,11 @@ func (me *trackerScraper) refusalBackoff(ar trackerAnnounceResult) time.Duration
 		me.refusals = 0
 	case me.t.isPrivate() && errors.Is(ar.Err, httpTracker.ErrFailureReason):
 		me.refusals++
+		if me.refusals == 1 {
+			for _, cb := range me.t.cl.config.Callbacks.PrivateTrackerRefused {
+				cb(me.t, ar.Err)
+			}
+		}
 		return time.Minute << (me.refusals - 1)
 	}
 	return ar.Interval
